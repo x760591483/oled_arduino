@@ -59,8 +59,43 @@ int dpin2_status = 0; // 末尾限位开关状态  0 表示未碰触  1表示碰
 int fanxiang = 0;
 int wait_ti = 5;
 
+// 外部开关
+int time_useful = 0;
+int time_buttun = -1; // 1 = 0.5hour  0 是只切换窗帘状态
+unsigned long time_buttun_close = 0;// 记录到点的时间点
+unsigned long time_buttun_less = 0;// 记录到点的时间剩余值
+int dpin3_status = 0;
+unsigned long time_doudong = 0;
+
+
 
 int inter_num = 0;
+
+void interrupt1() {
+
+  dpin3_status = digitalRead(3);
+  if (dpin3_status != 0) {
+    return;
+  }
+  if ((newtime - time_doudong) < 200) { // 防抖动
+    return;
+  }
+  time_doudong = newtime;
+  
+  
+
+  if (close_run_status || open_run_status) { // 打开关闭状态跳出
+    return;
+  }
+
+  if (time_useful == 0) {
+    time_buttun = -1;
+    time_buttun_close = 0;
+    time_buttun_less = 0;
+  }
+  time_useful = 5;
+  time_buttun += 1;
+}
 
 void time1_callback() {
    display.clearDisplay();
@@ -87,16 +122,35 @@ void time1_callback() {
   display.print(close_sunblind_time);
 
   display.setCursor(0, 20);
-  display.print(F("clos:"));
+  display.print(F("C/O:"));
   display.print(close_run_status);
-  display.print(F(" open:"));
+  display.print(F("-"));
   display.print(open_run_status); 
-  display.print(F(" int:"));
-  display.print(inter_num); 
+
+  // display.print(F(" int:"));
+  // display.print(inter_num); 
+  if (time_useful) {
+    display.print(F(" "));
+    double ttt = time_buttun / 2.0;
+    display.print(ttt);
+    display.print(F("h"));
+  } else {
+    display.print(F(" "));
+    display.print(time_buttun_less);
+    display.print(F("s"));
+  }
 
   display.display();      // Show initial text
   Serial.println(F("ligth_new"));
   Serial.println(ligth_new);
+  Serial.println(F("time_useful"));
+  Serial.println(time_useful);
+  Serial.println(F("time_buttun"));
+  Serial.println(time_buttun);
+  Serial.println(F("time_buttun_less"));
+  Serial.println(time_buttun_less);
+  Serial.println(F("time_buttun_close"));
+  Serial.println(time_buttun_close);
 
 }
 
@@ -119,6 +173,7 @@ void setup() {
   delay(2000);
 
   pinMode(2, INPUT_PULLUP);
+  pinMode(3, INPUT_PULLUP);
   pinMode(close_pin, OUTPUT);
   pinMode(open_pin, OUTPUT);
   pinMode(13, OUTPUT);
@@ -136,6 +191,8 @@ display.setTextColor(WHITE);
 // 设置外部中断
 attachInterrupt(0, interrupt0, CHANGE);
 dpin2_status = digitalRead(2);
+
+attachInterrupt(1, interrupt1, CHANGE);
 
 time1_callback();
 
@@ -157,12 +214,12 @@ void interrupt0() {
     digitalWrite(close_pin, LOW);
     close_run_status = 0;
     lianzi_status = 0;
-    digitalWrite(13, HIGH);
+    // digitalWrite(13, HIGH);
     close_sunblind_time_run = 0;
   }
   if (dpin2_status == 0 && lianzi_status == 0) {
     lianzi_status = 1;
-    digitalWrite(13, LOW);
+    // digitalWrite(13, LOW);
   }
 }
 
@@ -199,6 +256,56 @@ void loop() {
 
   if ((newtime - time10) > 1000) {
     time10 = newtime;
+
+    if (time_useful > 0) { // 按键待定时间
+      time_useful--;
+      if (time_useful == 0) {
+        if (time_buttun > 10) {
+          time_buttun = 10;
+        }
+        if (time_buttun > 0) {
+          time_buttun_less = time_buttun * 1800; // 多少秒
+          time_buttun_close = time10 + time_buttun_less * 1000;// 计算到几点
+          auto_status = 0; // 当有计时功能时，关闭自动功能
+          time_buttun = -1;
+        } else {
+          auto_status = 1;
+          time_buttun = -1;
+          time_buttun_less = 0; // 多少秒
+          time_buttun_close = 0;// 计算到几点
+        }
+        
+        if (lianzi_status == 0) { // 窗帘关闭状态  且  亮度不是太暗 则启动打开状态
+          open_sunblind_operate(); // 打开窗帘
+        } else { // 窗帘打开状态  且  亮度不是太亮 则启动关闭状态
+          close_sunblind_operate(); // 关闭窗帘
+        }
+
+      }
+    } else if (time_buttun_less > 0) {
+      if (time_buttun_close <= time10) {
+        // 时间到
+        if (lianzi_status == 0 && ligth_new  < dark_num ) { // 窗帘关闭状态  且  亮度不是太暗 则启动打开状态
+          open_sunblind_operate(); // 打开窗帘
+          digitalWrite(13, HIGH);
+        } else if (lianzi_status != 0 && ligth_new > ligth_num) { // 窗帘打开状态  且  亮度不是太亮 则启动关闭状态
+          close_sunblind_operate(); // 关闭窗帘
+          digitalWrite(13, HIGH);
+        }
+        time_buttun_close = 0;
+        time_buttun_less = 0;
+        time_buttun = -1;
+        auto_status = 1; // 换回自动方式
+      } else {
+        if ((time_buttun_close - time10) <= 1000) {
+          time_buttun_less = 1;
+        } else {
+          time_buttun_less = (time_buttun_close - time10) / 1000;
+        }
+      } 
+    }
+
+
     time1_callback();
     dpin2_status = digitalRead(2);
     if (open_run_status) {
